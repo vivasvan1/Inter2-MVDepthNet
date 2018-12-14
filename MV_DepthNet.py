@@ -12,7 +12,6 @@ from depthNet_model import depthNet
 from visualize import *
 import code
 
-
 class Camera_Param(object):
     def __init__(self):
         self.images = []
@@ -59,26 +58,27 @@ class Camera_Param(object):
         self.camera_k = np.asarray([[525.0,     0, 319.5],  # intrinsic parameters
                                     [0, 525.0, 239.5],
                                     [0,     0,     1]])
+        self.factored_camera_k = np.zeros((3,3),dtype=float)
 
         return
 
     def read(self, filenames, ref_idx):
 
         self.reference_index = ref_idx  # stores the index of the reference images
-        self.indices = np.concatenate((np.array(range(0, ref_idx)),  # stores the index of the neighbor images
-                                       np.array(range(ref_idx + 1, len(filenames)))), axis=0)
+        self.indices = np.concatenate((np.array(range(0, ref_idx),dtype=int),  # stores the index of the neighbor images
+                                       np.array(range(ref_idx + 1, len(filenames)),dtype=int)), axis=0)
         # This reads the input images. For all images in filenames,
-        images = [fn for fn in filenames]
+        #removed below  as filenames will already be a list
+        # images = [fn for fn in filenames]
         # This reads images.
-        self.images = [cv2.imread(img) for img in images]
+        self.images = [cv2.imread(imgpath) for imgpath in filenames]
         return
 
     def epipolar_testing(self):
         # test the epipolar line
         ref_idx = self.reference_index
 
-        for i in self.indices:  # epipolar testing for each neighbor image
-            cur_idx = int(i)
+        for cur_idx in self.indices:  # epipolar testing for each neighbor image
             # Position of left cam wrt to right_cam
             left2right = np.dot(inv(self.CameraPose[cur_idx]), self.CameraPose[ref_idx])
             # Half of image size in X-Y axis
@@ -104,7 +104,7 @@ class Camera_Param(object):
             # Position of near pixel in right image
             near_pixel = np.dot(self.camera_k, near_point[0:3])
             near_pixel = (near_pixel / near_pixel[2])[0:2]               # x = X/W, y = Y/W
-
+			#draw epipolar geometry on the image
             cv2.line(self.images[cur_idx],
                      (int(far_pixel[0] + 0.5), int(far_pixel[1] + 0.5)),
                      (int(near_pixel[0] + 0.5), int(near_pixel[1] + 0.5)), [0, 0, 255], 4)
@@ -139,8 +139,7 @@ class Camera_Param(object):
         left_image_cuda = Variable(left_image_cuda, volatile=True)
         self.image_cuda.append(left_image_cuda)
 
-        for i in self.indices:
-            cur_idx = int(i)
+        for cur_idx in self.indices:
             # changes the shape
             torch_right_image = np.moveaxis(self.image_resize[cur_idx], -1, 0)
             # changes the shape
@@ -157,18 +156,17 @@ class Camera_Param(object):
 
         KRKiUV_cuda_Ts = []
         KT_cuda_Ts = []
-        self.camera_k[0, :] *= factor_x  # scaling the camera matrix
-        self.camera_k[1, :] *= factor_y
+        self.factored_camera_k[0, :] = self.camera_k[0, :]* factor_x  # scaling the camera matrix
+        self.factored_camera_k[1, :] = self.camera_k[1, :]* factor_y
+        self.factored_camera_k[2, :] = self.camera_k[2, :]
 
         ref_idx = self.reference_index
 
-        for i in self.indices:
-            cur_idx = int(i)
-
+        for cur_idx in self.indices:
             left2right = np.dot(inv(self.CameraPose[cur_idx]), self.CameraPose[0])
             left_in_right_T = left2right[0:3, 3]
             left_in_right_R = left2right[0:3, 0:3]
-            K = self.camera_k
+            K = self.factored_camera_k
             K_inverse = inv(K)
             KRK_i = K.dot(left_in_right_R.dot(K_inverse))
             # projecting all pixels of reference_view to neighbor_view (equation 2). But only rotation considered
@@ -189,9 +187,11 @@ class Camera_Param(object):
         return KRKiUV_cuda_Ts, KT_cuda_Ts
 
     def estimate_depth(self, new_width, new_height):
-
+    	
+    	#geting shape of original images
         original_width = self.images[0].shape[1]
         original_height = self.images[0].shape[0]
+        #calculating multiplication factor 
         factor_x = new_width / original_width
         factor_y = new_height / original_height
         # Resizing the image
